@@ -42,7 +42,7 @@ Dimension 4 is what's new. Every memory carries a **strategic envelope**:
 
 ```bash
 # 1. Clone and configure
-git clone https://github.com/shwetapateldr/anamnesis.git
+git clone https://github.com/gayawellness/anamnesis.git
 cd anamnesis
 cp .env.example .env
 # Edit .env with your API keys (Anthropic or OpenAI + optionally Voyage AI)
