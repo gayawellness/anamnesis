@@ -1,0 +1,30 @@
+services:
+  anamnesis:
+    build: .
+    env_file: .env
+    ports:
+      - "${ANAMNESIS_PORT:-8400}:8400"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: ${ANAMNESIS_DB_NAME:-anamnesis}
+      POSTGRES_USER: ${ANAMNESIS_DB_USER:-anamnesis}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-anamnesis_dev}
+    ports:
+      - "${ANAMNESIS_DB_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${ANAMNESIS_DB_USER:-anamnesis}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  pgdata:
