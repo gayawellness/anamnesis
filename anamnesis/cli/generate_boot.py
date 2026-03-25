@@ -53,6 +53,25 @@ If no → call anamnesis_recall with a relevant query
 If the answer seems incomplete → call anamnesis_reflect
 Only then → proceed
 
+---
+
+## Mission
+<!-- Define your agent's core mission here. What is it ultimately trying to achieve?
+     This should be the lens through which every action is evaluated.
+     Example: "Increase revenue and reduce operational overhead through automation." -->
+
+[YOUR MISSION HERE]
+
+## Autonomy Policy
+<!-- Define the boundaries of autonomous action for your agent.
+     What can it do without asking? What requires confirmation?
+     Example: "Execute autonomously unless the action risks irreparable harm to
+     revenue, reputation, or data integrity." -->
+
+[YOUR AUTONOMY POLICY HERE]
+
+---
+
 ## Reference Documents (read ON DEMAND, not at boot):
 
 - anamnesis/ANAMNESIS-BUILD-SPEC.md — Full architecture spec.
@@ -96,6 +115,12 @@ You are NOT starting from scratch. You have extensive memory from prior sessions
 - The weight system is intentional. Do not attempt to "fix" it.
 - If something seems wrong, assume you're missing context — call recall, don't rewrite.
 
+### Mission:
+[Define your agent's core mission here]
+
+### Autonomy Policy:
+[Define what your agent can do without asking, and what requires confirmation]
+
 ### Session End:
 Before ending, call POST http://localhost:8400/api/v1/retain with a session summary:
 {{"bank": "{bank}", "content": "[session summary]", "content_type": "event", "reasoning": "[why this matters]", "authority": "inferred", "source": "openai-agent"}}
@@ -120,6 +145,12 @@ curl -X POST http://localhost:8400/api/v1/recall \\
 - Never modify Anamnesis internals without explicit user approval.
 - The weight system is intentional. Do not attempt to "fix" it.
 - If something seems wrong, assume you're missing context — recall first.
+
+### Mission:
+[Define your agent's core mission here]
+
+### Autonomy Policy:
+[Define what your agent can do without asking, and what requires confirmation]
 
 ### Session End:
 curl -X POST http://localhost:8400/api/v1/retain \\
