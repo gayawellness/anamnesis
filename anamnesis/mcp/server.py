@@ -37,7 +37,7 @@ TOOLS = [
         inputSchema={
             "type": "object",
             "properties": {
-                "bank": {"type": "string", "description": "Memory bank name (e.g. 'gaya_operations')"},
+                "bank": {"type": "string", "description": "Memory bank name (e.g. 'my_project')"},
                 "content": {"type": "string", "description": "The memory content to store"},
                 "content_type": {
                     "type": "string",

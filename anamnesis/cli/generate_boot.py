@@ -1,7 +1,7 @@
 """Generate boot protocol prompts for agent platforms.
 
 Usage:
-    python3 -m anamnesis.cli generate-boot-prompt --bank gaya_operations --format claude-code
+    python3 -m anamnesis.cli generate-boot-prompt --bank my_bank --format claude-code
     python3 -m anamnesis.cli generate-boot-prompt --bank my_bank --format generic
     python3 -m anamnesis.cli generate-boot-prompt --bank my_bank --format openai --output system_prompt.md
 """
