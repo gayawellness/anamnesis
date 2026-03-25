@@ -166,6 +166,58 @@ class AnamnesisClient:
     def get_memory(self, memory_id: str) -> dict:
         return self._check(self._client.get(f"/memories/{memory_id}"))
 
+    # ── Export / Import ──
+
+    def export_bank(self, bank_name: str) -> dict:
+        """Export a single bank to JSON backup format.
+
+        Args:
+            bank_name: Name of the bank to export.
+
+        Returns:
+            Export dict with version, exported_at, and banks array.
+        """
+        return self._check(self._client.get(f"/export/{bank_name}"))
+
+    def export_all(self) -> dict:
+        """Export all banks by iterating the bank list.
+
+        Returns:
+            Combined export dict with all banks.
+        """
+        from datetime import datetime, timezone
+        banks = self.list_banks()
+        all_banks = []
+        for bank in banks:
+            name = bank.get("name", "")
+            if not name:
+                continue
+            try:
+                result = self.export_bank(name)
+                if "banks" in result:
+                    all_banks.extend(result["banks"])
+            except AnamnesisError:
+                pass  # skip banks that fail to export
+        return {
+            "version": "1.0",
+            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "banks": all_banks,
+        }
+
+    def import_backup(self, data: dict, merge: bool = False) -> dict:
+        """Import banks from a backup dict.
+
+        Args:
+            data: The export dict (with version, banks, etc.).
+            merge: If True, skip existing memories instead of failing.
+
+        Returns:
+            Import result dict with counts.
+        """
+        return self._check(
+            self._client.post("/import", json={"data": data, "merge": merge})
+        )
+
     # ── Cleanup ──
 
     def close(self):

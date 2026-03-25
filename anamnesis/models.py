@@ -104,6 +104,7 @@ class RetainResponse(BaseModel):
     extracted_facts: list[ExtractedFact]
     entities_linked: list[str]
     weight: float
+    weight_note: str = ""
 
 
 # ── Recall ──
@@ -204,6 +205,29 @@ class BulkRetainRequest(BaseModel):
 class BulkRetainResponse(BaseModel):
     retained_count: int
     memory_ids: list[str]
+    errors: list[str] = Field(default_factory=list)
+
+
+# ── Export / Import ──
+
+class ExportResponse(BaseModel):
+    version: str = "1.0"
+    exported_at: datetime
+    banks: list[dict]
+
+
+class ImportRequest(BaseModel):
+    data: dict
+    merge: bool = False
+
+
+class ImportResponse(BaseModel):
+    imported_banks: int = 0
+    imported_memories: int = 0
+    imported_entities: int = 0
+    imported_relationships: int = 0
+    skipped_memories: int = 0
+    skipped_entities: int = 0
     errors: list[str] = Field(default_factory=list)
 
 

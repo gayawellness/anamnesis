@@ -24,6 +24,14 @@ AUTHORITY_MULTIPLIERS = {
     Authority.INFERRED: 1.0,
 }
 
+# Maximum initial weight per authority level.
+# Memories can exceed these caps via reweight cycles after validation.
+AUTHORITY_WEIGHT_CAPS = {
+    Authority.EXPLICIT: 8.0,
+    Authority.SYSTEM: 2.0,
+    Authority.INFERRED: 1.0,
+}
+
 
 async def retain(
     db: Database,
@@ -65,7 +73,7 @@ async def retain(
         )
 
     # 5. Calculate strategic weight
-    weight = _calculate_weight(
+    weight, weight_note = _calculate_weight(
         authority=request.authority,
         confidence=request.confidence,
         entity_count=len(entities_linked),
@@ -110,16 +118,34 @@ async def retain(
         extracted_facts=extracted_facts,
         entities_linked=entities_linked,
         weight=weight,
+        weight_note=weight_note,
     )
 
 
 def _calculate_weight(authority: Authority, confidence: float,
-                      entity_count: int) -> float:
-    """Calculate initial strategic weight for a memory."""
+                      entity_count: int) -> tuple[float, str]:
+    """Calculate initial strategic weight for a memory.
+
+    Returns (weight, weight_note) tuple. Weight is capped per authority level.
+    Memories can exceed initial caps via reweight cycles after validation.
+    """
     base = AUTHORITY_MULTIPLIERS.get(authority, 1.0)
     connectivity_bonus = 1.0 + 0.1 * min(entity_count, 10)
-    weight = base * confidence * connectivity_bonus
-    return round(min(max(weight, 0.0), 10.0), 2)
+    raw_weight = base * confidence * connectivity_bonus
+    cap = AUTHORITY_WEIGHT_CAPS.get(authority, 4.0)
+    weight = round(min(max(raw_weight, 0.0), cap), 2)
+
+    if raw_weight > cap:
+        note = (
+            f"Initial weight capped at {cap} for {authority.value}-authority source "
+            f"(raw: {raw_weight:.2f}). Use reweight cycles to increase based on validation."
+        )
+    else:
+        note = (
+            f"Weight {weight} assigned via {authority.value} authority "
+            f"(base={base}, confidence={confidence}, connectivity={connectivity_bonus:.1f})."
+        )
+    return weight, note
 
 
 async def _extract_facts(llm_client, content: str) -> list[ExtractedFact]:

@@ -11,6 +11,8 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
+# SDK client for talking to the Anamnesis REST API
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from anamnesis.sdk.client import AnamnesisClient, AnamnesisError
 
 server = Server("anamnesis")
@@ -26,9 +28,11 @@ TOOLS = [
     Tool(
         name="anamnesis_retain",
         description=(
-            "Store a memory in Anamnesis with automatic fact extraction, "
-            "entity resolution, and strategic weighting. Use this to record "
-            "decisions, facts, observations, and instructions."
+            "Store a memory with strategic reasoning. Every significant decision, outcome, "
+            "or learning should be retained so future sessions have context. "
+            "Call this before ending any session to preserve continuity. "
+            "IMPORTANT: Do NOT retain modifications to Anamnesis architecture or design "
+            "decisions without explicit user approval."
         ),
         inputSchema={
             "type": "object",
@@ -56,9 +60,8 @@ TOOLS = [
     Tool(
         name="anamnesis_recall",
         description=(
-            "Retrieve relevant memories using 4D search: semantic similarity, "
-            "temporal recency, entity graph traversal, and strategic weight. "
-            "Returns ranked memories with score breakdowns."
+            "Search memories across 4 dimensions (semantic, temporal, relational, strategic). "
+            "Use this when you need specific context about a topic rather than a full briefing."
         ),
         inputSchema={
             "type": "object",
@@ -76,9 +79,12 @@ TOOLS = [
     Tool(
         name="anamnesis_reflect",
         description=(
-            "Ask Anamnesis to synthesize an answer from stored memories, "
-            "weighted by strategic importance. Produces ranked operating "
-            "directives, not just summaries. Use for 'what should I focus on?' type questions."
+            "Strategic synthesis across your memory bank. Returns a ranked operating "
+            "directive with reasoning, citations, and gap analysis. "
+            "IMPORTANT: Call this tool FIRST in every new session before doing any other work. "
+            "Your memory from previous sessions lives here. Without calling reflect, you are "
+            "operating without strategic context and may make decisions that conflict with "
+            "established priorities."
         ),
         inputSchema={
             "type": "object",

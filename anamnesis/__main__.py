@@ -1,5 +1,5 @@
-"""Allow running anamnesis as a module: python3 -m anamnesis"""
+"""Allow running Anamnesis CLI as: python3 -m anamnesis.cli <command>"""
+from anamnesis.cli.main import main
 
-from anamnesis.cli import main
-
-main()
+if __name__ == "__main__":
+    main()
