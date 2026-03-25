@@ -138,6 +138,31 @@ class AnamnesisClient:
         }
         return self._check(self._client.post("/reflect", json=body))
 
+    def boot(self, bank: str, agent_name: Optional[str] = None,
+             include_recent_sessions: bool = True,
+             max_tokens: int = 2000) -> dict:
+        """Fetch a structured boot briefing for cold-start orientation.
+
+        This is a fast, deterministic data assembly — no LLM call.
+
+        Args:
+            bank: Memory bank name.
+            agent_name: Optional agent identifier for personalized briefing.
+            include_recent_sessions: Include recent outcomes (last 48h).
+            max_tokens: Max tokens hint (reserved for future use).
+
+        Returns:
+            Boot package with mission, directives, priorities, outcomes,
+            decay alerts, architecture rules, gaps, and cold start info.
+        """
+        body: dict = {
+            "include_recent_sessions": include_recent_sessions,
+            "max_tokens": max_tokens,
+        }
+        if agent_name:
+            body["agent_name"] = agent_name
+        return self._check(self._client.post(f"/boot/{bank}", json=body))
+
     def decay_check(self, bank: str) -> dict:
         return self._check(self._client.post("/decay-check", json={"bank": bank}))
 
@@ -216,6 +241,38 @@ class AnamnesisClient:
         """
         return self._check(
             self._client.post("/import", json={"data": data, "merge": merge})
+        )
+
+    # ── Prune & Restore ──
+
+    def prune(self, bank: str, dry_run: bool = True) -> dict:
+        """Find and optionally archive prune candidates in a bank.
+
+        Args:
+            bank: Memory bank name.
+            dry_run: If True, return candidates without archiving.
+
+        Returns:
+            Dict with candidates list, archived_count, and dry_run flag.
+        """
+        return self._check(
+            self._client.post(
+                f"/prune/{bank}",
+                json={"bank": bank, "dry_run": dry_run},
+            )
+        )
+
+    def restore(self, memory_id: str) -> dict:
+        """Restore an archived memory back to active status.
+
+        Args:
+            memory_id: UUID of the memory to restore.
+
+        Returns:
+            Dict with memory_id, status, and content preview.
+        """
+        return self._check(
+            self._client.post(f"/restore/{memory_id}")
         )
 
     # ── Cleanup ──

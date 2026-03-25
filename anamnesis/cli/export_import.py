@@ -251,6 +251,9 @@ async def export_bank_from_db(db, bank_name: str) -> dict:
     weight_factors = bank.get("weight_factors", {})
     if isinstance(weight_factors, str):
         weight_factors = json.loads(weight_factors)
+    write_agents = bank.get("write_agents", [])
+    if isinstance(write_agents, str):
+        write_agents = json.loads(write_agents)
 
     # Serialize
     memories = [_serialize_memory(m) for m in memories_raw]
@@ -275,6 +278,7 @@ async def export_bank_from_db(db, bank_name: str) -> dict:
             "disposition": bank.get("disposition", "balanced"),
             "weight_factors": weight_factors,
             "default_decay_days": bank.get("default_decay_days", 90),
+            "write_agents": write_agents,
         },
         "memories": memories,
         "entities": entities,
@@ -371,6 +375,7 @@ async def import_bank_to_db(db, embedder, data: dict,
                     disposition=config.get("disposition"),
                     weight_factors=config.get("weight_factors"),
                     default_decay_days=config.get("default_decay_days"),
+                    write_agents=config.get("write_agents"),
                 )
         else:
             new_bank = await db.create_bank(
@@ -383,6 +388,7 @@ async def import_bank_to_db(db, embedder, data: dict,
                     "relational": 0.20, "strategic": 0.30,
                 }),
                 default_decay_days=config.get("default_decay_days", 90),
+                write_agents=config.get("write_agents", []),
             )
             bank_id = str(new_bank["id"])
 

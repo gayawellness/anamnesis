@@ -57,6 +57,9 @@ async def retain(
         raise ValueError(f"Memory bank not found: {request.bank}")
     bank_id = str(bank["id"])
 
+    # 1b. Enforce write_agents access control
+    _enforce_write_access(bank, request.source)
+
     # 2. Generate embedding
     embedding = await embedder.embed(request.content)
 
@@ -146,6 +149,33 @@ def _calculate_weight(authority: Authority, confidence: float,
             f"(base={base}, confidence={confidence}, connectivity={connectivity_bonus:.1f})."
         )
     return weight, note
+
+
+def _enforce_write_access(bank: dict, source: str) -> None:
+    """Check if the source agent is allowed to write to this bank.
+
+    If write_agents is empty or not set, any agent can write (backward compatible).
+    If write_agents is set, only listed agents may retain to this bank.
+    """
+    import json
+
+    write_agents = bank.get("write_agents", [])
+    # Handle JSONB stored as string (depends on driver behavior)
+    if isinstance(write_agents, str):
+        try:
+            write_agents = json.loads(write_agents)
+        except (json.JSONDecodeError, TypeError):
+            write_agents = []
+
+    # Empty list = open access (backward compatible)
+    if not write_agents:
+        return
+
+    if source not in write_agents:
+        raise ValueError(
+            f"Source '{source}' is not authorized to write to bank '{bank['name']}'. "
+            f"Authorized write agents: {write_agents}"
+        )
 
 
 async def _extract_facts(llm_client, content: str) -> list[ExtractedFact]:

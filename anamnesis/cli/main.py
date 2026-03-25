@@ -1,11 +1,16 @@
 """Anamnesis CLI — command-line tools for memory management.
 
 Usage:
+    python3 -m anamnesis.cli boot --bank <name>
+    python3 -m anamnesis.cli boot --bank <name> --json
     python3 -m anamnesis.cli generate-boot-prompt --bank <name> --format <format>
     python3 -m anamnesis.cli export --bank <name> --output backup.json
     python3 -m anamnesis.cli export --all --output full_backup.json
     python3 -m anamnesis.cli import --file backup.json
     python3 -m anamnesis.cli import --file backup.json --merge
+    python3 -m anamnesis.cli prune --bank <name> --dry-run
+    python3 -m anamnesis.cli prune --bank <name>
+    python3 -m anamnesis.cli restore --memory-id <uuid>
 """
 
 from __future__ import annotations
@@ -15,6 +20,87 @@ import json
 import sys
 
 from anamnesis.cli.generate_boot import generate_boot_prompt, SUPPORTED_FORMATS
+
+
+def cmd_boot(args: argparse.Namespace) -> None:
+    """Fetch a boot briefing from the Anamnesis API."""
+    from anamnesis.sdk.client import AnamnesisClient, AnamnesisError
+
+    client = AnamnesisClient.from_env()
+    try:
+        result = client.boot(
+            bank=args.bank,
+            agent_name=getattr(args, "agent", None),
+            include_recent_sessions=not getattr(args, "no_recent", False),
+        )
+
+        if args.json_output:
+            print(json.dumps(result, indent=2, default=str))
+            return
+
+        # Human-readable output
+        print(f"=== Boot Briefing: {args.bank} ===\n")
+
+        print(f"Mission: {result.get('mission', '(none)')}\n")
+
+        directives = result.get("directives", [])
+        if directives:
+            print("Directives:")
+            for d in directives:
+                print(f"  - {d}")
+            print()
+
+        cold = result.get("cold_start_warning", False)
+        hours = result.get("hours_since_last_query")
+        if hours is not None:
+            status = "COLD START" if cold else "warm"
+            print(f"Status: {status} ({hours}h since last query)\n")
+        elif cold:
+            print("Status: COLD START (no previous queries)\n")
+
+        priorities = result.get("top_priorities", [])
+        if priorities:
+            print(f"Top Priorities ({len(priorities)}):")
+            for p in priorities:
+                deps = ""
+                if p.get("dependencies"):
+                    deps = f" [deps: {', '.join(p['dependencies'])}]"
+                print(f"  [{p['weight']:.1f}] {p['content']}{deps}")
+            print()
+
+        outcomes = result.get("recent_outcomes", [])
+        if outcomes:
+            print(f"Recent Outcomes ({len(outcomes)}):")
+            for o in outcomes:
+                print(f"  [{o['when']}] ({o['source']}) {o['content']}")
+            print()
+
+        alerts = result.get("active_decay_alerts", [])
+        if alerts:
+            print(f"Decay Alerts ({len(alerts)}):")
+            for a in alerts:
+                print(f"  [{a['status'].upper()}] {a['content']} ({a['condition']})")
+            print()
+
+        rules = result.get("architecture_rules", [])
+        if rules:
+            print(f"Architecture Rules ({len(rules)}):")
+            for r in rules:
+                print(f"  - {r}")
+            print()
+
+        gaps = result.get("gaps_identified", [])
+        if gaps:
+            print(f"Gaps ({len(gaps)}):")
+            for g in gaps:
+                print(f"  - {g}")
+            print()
+
+    except AnamnesisError as e:
+        print(f"Boot failed: {e}", file=sys.stderr)
+        sys.exit(1)
+    finally:
+        client.close()
 
 
 def cmd_generate_boot(args: argparse.Namespace) -> None:
@@ -111,12 +197,92 @@ def cmd_import(args: argparse.Namespace) -> None:
         client.close()
 
 
+def cmd_prune(args: argparse.Namespace) -> None:
+    """Preview or execute memory pruning for a bank."""
+    from anamnesis.sdk.client import AnamnesisClient, AnamnesisError
+
+    client = AnamnesisClient.from_env()
+    try:
+        dry_run = args.dry_run
+        result = client.prune(bank=args.bank, dry_run=dry_run)
+
+        candidates = result.get("candidates", [])
+        archived = result.get("archived_count", 0)
+        mode = "DRY RUN" if dry_run else "EXECUTED"
+
+        print(f"=== Prune {mode}: {args.bank} ===\n")
+        print(f"Candidates found: {len(candidates)}")
+
+        if not dry_run:
+            print(f"Memories archived: {archived}")
+
+        if candidates:
+            print()
+            for c in candidates:
+                content_preview = c.get("content", "")[:80]
+                weight = c.get("weight", 0)
+                reason = c.get("reason", "unknown")
+                status = c.get("status", "unknown")
+                print(f"  [{status}] (w={weight:.2f}) {content_preview}")
+                print(f"         Reason: {reason}")
+        else:
+            print("\nNo prune candidates found.")
+
+        if dry_run and candidates:
+            print(f"\nRe-run without --dry-run to archive {len(candidates)} memories.")
+
+    except AnamnesisError as e:
+        print(f"Prune failed: {e}", file=sys.stderr)
+        sys.exit(1)
+    finally:
+        client.close()
+
+
+def cmd_restore(args: argparse.Namespace) -> None:
+    """Restore an archived memory back to active status."""
+    from anamnesis.sdk.client import AnamnesisClient, AnamnesisError
+
+    client = AnamnesisClient.from_env()
+    try:
+        result = client.restore(memory_id=args.memory_id)
+        print(f"Restored memory {result['memory_id']} to status '{result['status']}'")
+        content = result.get("content", "")
+        if content:
+            print(f"  Content: {content[:120]}")
+    except AnamnesisError as e:
+        print(f"Restore failed: {e}", file=sys.stderr)
+        sys.exit(1)
+    finally:
+        client.close()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="anamnesis",
         description="Anamnesis CLI — strategic memory management tools",
     )
     sub = parser.add_subparsers(dest="command")
+
+    # boot
+    boot_cmd = sub.add_parser(
+        "boot",
+        help="Fetch a cold-start boot briefing from a memory bank",
+    )
+    boot_cmd.add_argument(
+        "--bank", required=True, help="Memory bank name",
+    )
+    boot_cmd.add_argument(
+        "--agent", default=None,
+        help="Agent name (optional, for personalized briefing)",
+    )
+    boot_cmd.add_argument(
+        "--no-recent", action="store_true", default=False,
+        help="Exclude recent session outcomes",
+    )
+    boot_cmd.add_argument(
+        "--json", dest="json_output", action="store_true", default=False,
+        help="Output raw JSON instead of human-readable format",
+    )
 
     # generate-boot-prompt
     boot_gen = sub.add_parser(
@@ -166,6 +332,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="Merge mode: skip memories that already exist instead of failing",
     )
 
+    # prune
+    prune_cmd = sub.add_parser(
+        "prune",
+        help="Preview or archive stale, decayed, and superseded memories",
+    )
+    prune_cmd.add_argument(
+        "--bank", required=True, help="Memory bank name",
+    )
+    prune_cmd.add_argument(
+        "--dry-run", action="store_true", default=False,
+        help="Preview candidates without archiving (default behavior)",
+    )
+
+    # restore
+    restore_cmd = sub.add_parser(
+        "restore",
+        help="Restore an archived memory back to active status",
+    )
+    restore_cmd.add_argument(
+        "--memory-id", required=True,
+        help="UUID of the archived memory to restore",
+    )
+
     return parser
 
 
@@ -178,9 +367,12 @@ def main() -> None:
         sys.exit(1)
 
     commands = {
+        "boot": cmd_boot,
         "generate-boot-prompt": cmd_generate_boot,
         "export": cmd_export,
         "import": cmd_import,
+        "prune": cmd_prune,
+        "restore": cmd_restore,
     }
 
     handler = commands.get(args.command)

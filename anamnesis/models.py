@@ -53,6 +53,7 @@ class BankCreate(BaseModel):
         "strategic": 0.30,
     })
     default_decay_days: int = 90
+    write_agents: list[str] = Field(default_factory=list)
 
 
 class BankUpdate(BaseModel):
@@ -61,6 +62,7 @@ class BankUpdate(BaseModel):
     disposition: Optional[str] = None
     weight_factors: Optional[dict[str, float]] = None
     default_decay_days: Optional[int] = None
+    write_agents: Optional[list[str]] = None
 
 
 class BankResponse(BaseModel):
@@ -71,6 +73,7 @@ class BankResponse(BaseModel):
     disposition: str
     weight_factors: dict[str, float]
     default_decay_days: int
+    write_agents: list[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
     memory_count: int = 0
@@ -208,6 +211,38 @@ class BulkRetainResponse(BaseModel):
     errors: list[str] = Field(default_factory=list)
 
 
+# ── Prune / Restore ──
+
+class PruneRequest(BaseModel):
+    bank: str
+    dry_run: bool = True
+
+
+class PruneCandidate(BaseModel):
+    id: str
+    content: str
+    reason: str
+    weight: float
+    status: str
+    last_accessed_at: Optional[datetime] = None
+
+
+class PruneResponse(BaseModel):
+    candidates: list[dict]
+    archived_count: int
+    dry_run: bool
+
+
+class RestoreRequest(BaseModel):
+    memory_id: str
+
+
+class RestoreResponse(BaseModel):
+    memory_id: str
+    status: str
+    content: str
+
+
 # ── Export / Import ──
 
 class ExportResponse(BaseModel):
@@ -229,6 +264,48 @@ class ImportResponse(BaseModel):
     skipped_memories: int = 0
     skipped_entities: int = 0
     errors: list[str] = Field(default_factory=list)
+
+
+# ── Health ──
+
+# ── Boot Briefing ──
+
+class BootRequest(BaseModel):
+    agent_name: Optional[str] = None
+    include_recent_sessions: bool = True
+    max_tokens: int = 2000
+
+
+class BootPriority(BaseModel):
+    content: str
+    weight: float
+    reasoning: Optional[str] = None
+    dependencies: list[str] = Field(default_factory=list)
+
+
+class BootOutcome(BaseModel):
+    content: str
+    when: str
+    source: str
+
+
+class BootDecayAlert(BaseModel):
+    memory_id: str
+    content: str
+    condition: str
+    status: str  # "approaching" or "triggered"
+
+
+class BootResponse(BaseModel):
+    mission: str
+    directives: list[str]
+    top_priorities: list[BootPriority]
+    recent_outcomes: list[BootOutcome]
+    active_decay_alerts: list[BootDecayAlert]
+    architecture_rules: list[str]
+    gaps_identified: list[str]
+    cold_start_warning: bool
+    hours_since_last_query: Optional[float] = None
 
 
 # ── Health ──

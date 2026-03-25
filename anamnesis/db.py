@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS memory_banks (
     disposition TEXT NOT NULL DEFAULT 'balanced',
     weight_factors JSONB NOT NULL DEFAULT '{{"semantic": 0.30, "temporal": 0.20, "relational": 0.20, "strategic": 0.30}}',
     default_decay_days INTEGER DEFAULT 90,
+    write_agents JSONB NOT NULL DEFAULT '[]',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -151,7 +152,23 @@ class Database:
         schema = SCHEMA_SQL.format(dims=self.embedding_dims)
         async with self.acquire() as conn:
             await conn.execute(schema)
+            # Incremental migrations for existing databases
+            await self._migrate_write_agents(conn)
         logger.info("Schema migrations applied (vector dims=%d)", self.embedding_dims)
+
+    async def _migrate_write_agents(self, conn):
+        """Add write_agents column to memory_banks if it doesn't exist."""
+        col_exists = await conn.fetchval(
+            """SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'memory_banks' AND column_name = 'write_agents'
+            )"""
+        )
+        if not col_exists:
+            await conn.execute(
+                "ALTER TABLE memory_banks ADD COLUMN write_agents JSONB NOT NULL DEFAULT '[]'"
+            )
+            logger.info("Migration: added write_agents column to memory_banks")
 
     async def close(self):
         """Close connection pool."""
@@ -185,15 +202,17 @@ class Database:
 
     async def create_bank(self, name: str, mission: str, directives: list,
                           disposition: str, weight_factors: dict,
-                          default_decay_days: int) -> dict:
+                          default_decay_days: int,
+                          write_agents: list | None = None) -> dict:
         async with self.transaction() as conn:
             row = await conn.fetchrow(
                 """INSERT INTO memory_banks (name, mission, directives, disposition,
-                   weight_factors, default_decay_days)
-                   VALUES ($1, $2, $3::jsonb, $4, $5::jsonb, $6)
+                   weight_factors, default_decay_days, write_agents)
+                   VALUES ($1, $2, $3::jsonb, $4, $5::jsonb, $6, $7::jsonb)
                    RETURNING *""",
                 name, mission, _to_json(directives), disposition,
                 _to_json(weight_factors), default_decay_days,
+                _to_json(write_agents or []),
             )
             return dict(row)
 
@@ -222,7 +241,7 @@ class Database:
         idx = 1
         for key, val in kwargs.items():
             if val is not None:
-                if key in ("directives", "weight_factors"):
+                if key in ("directives", "weight_factors", "write_agents"):
                     sets.append(f"{key} = ${idx}::jsonb")
                     vals.append(_to_json(val))
                 else:
@@ -588,6 +607,119 @@ class Database:
             await conn.executemany(
                 "UPDATE memories SET weight = $2 WHERE id = $1::uuid",
                 updates,
+            )
+
+    # ── Boot Operations ──
+
+    async def get_top_weighted_memories(self, bank_id: str, limit: int = 10,
+                                         status: str = "active") -> list[dict]:
+        """Get the highest-weight active memories for a bank."""
+        async with self.acquire() as conn:
+            rows = await conn.fetch(
+                """SELECT * FROM memories
+                   WHERE bank_id = $1::uuid AND status = $2
+                   ORDER BY weight DESC, created_at DESC
+                   LIMIT $3""",
+                bank_id, status, limit,
+            )
+            return [dict(r) for r in rows]
+
+    async def get_recent_memories(self, bank_id: str, hours: int = 48,
+                                   limit: int = 10,
+                                   status: str = "active") -> list[dict]:
+        """Get memories created within the last N hours."""
+        async with self.acquire() as conn:
+            rows = await conn.fetch(
+                """SELECT * FROM memories
+                   WHERE bank_id = $1::uuid AND status = $2
+                     AND created_at >= NOW() - ($3 || ' hours')::interval
+                   ORDER BY created_at DESC
+                   LIMIT $4""",
+                bank_id, status, str(hours), limit,
+            )
+            return [dict(r) for r in rows]
+
+    async def get_memories_by_tags(self, bank_id: str, tags: list[str],
+                                    limit: int = 20,
+                                    status: str = "active") -> list[dict]:
+        """Get active memories that have any of the given tags."""
+        if not tags:
+            return []
+        async with self.acquire() as conn:
+            rows = await conn.fetch(
+                """SELECT * FROM memories
+                   WHERE bank_id = $1::uuid AND status = $2
+                     AND tags && $3::text[]
+                   ORDER BY weight DESC
+                   LIMIT $4""",
+                bank_id, status, tags, limit,
+            )
+            return [dict(r) for r in rows]
+
+    async def get_last_access_time(self, bank_id: str) -> "datetime | None":
+        """Get the most recent access time for any memory in a bank."""
+        async with self.acquire() as conn:
+            row = await conn.fetchval(
+                """SELECT MAX(accessed_at) FROM memory_accesses ma
+                   JOIN memories m ON ma.memory_id = m.id
+                   WHERE m.bank_id = $1::uuid""",
+                bank_id,
+            )
+            return row
+
+    # ── Prune Operations ──
+
+    async def get_non_active_memories(self, bank_id: str) -> list[dict]:
+        """Get memories that are decayed or superseded (not active, not already archived)."""
+        async with self.acquire() as conn:
+            rows = await conn.fetch(
+                """SELECT * FROM memories
+                   WHERE bank_id = $1::uuid
+                     AND status NOT IN ('active', 'archived')""",
+                bank_id,
+            )
+            return [dict(r) for r in rows]
+
+    async def get_low_weight_stale_memories(
+        self, bank_id: str, weight_floor: float, unaccessed_days: int
+    ) -> list[dict]:
+        """Get active memories with weight below floor and not accessed in N days."""
+        async with self.acquire() as conn:
+            rows = await conn.fetch(
+                """SELECT * FROM memories
+                   WHERE bank_id = $1::uuid
+                     AND status = 'active'
+                     AND weight < $2
+                     AND last_accessed_at < NOW() - ($3 || ' days')::interval""",
+                bank_id, weight_floor, str(unaccessed_days),
+            )
+            return [dict(r) for r in rows]
+
+    async def get_old_superseded_memories(
+        self, bank_id: str, age_days: int
+    ) -> list[dict]:
+        """Get active memories that have been superseded and are older than N days."""
+        async with self.acquire() as conn:
+            rows = await conn.fetch(
+                """SELECT * FROM memories
+                   WHERE bank_id = $1::uuid
+                     AND status = 'active'
+                     AND superseded_by IS NOT NULL
+                     AND created_at < NOW() - ($2 || ' days')::interval""",
+                bank_id, str(age_days),
+            )
+            return [dict(r) for r in rows]
+
+    async def batch_archive_memories(self, memory_ids: list[str]):
+        """Set status to 'archived' for a batch of memories."""
+        if not memory_ids:
+            return
+        async with self.transaction() as conn:
+            await conn.execute(
+                """UPDATE memories
+                   SET status = 'archived'
+                   WHERE id = ANY($1::uuid[])""",
+                memory_ids,
             )
 
     # ── Stats ──
