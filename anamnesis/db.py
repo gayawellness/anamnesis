@@ -154,6 +154,7 @@ class Database:
             await conn.execute(schema)
             # Incremental migrations for existing databases
             await self._migrate_write_agents(conn)
+            await self._migrate_embedding_status(conn)
         logger.info("Schema migrations applied (vector dims=%d)", self.embedding_dims)
 
     async def _migrate_write_agents(self, conn):
@@ -169,6 +170,21 @@ class Database:
                 "ALTER TABLE memory_banks ADD COLUMN write_agents JSONB NOT NULL DEFAULT '[]'"
             )
             logger.info("Migration: added write_agents column to memory_banks")
+
+    async def _migrate_embedding_status(self, conn):
+        """Add embedding_status column to memories if it doesn't exist."""
+        col_exists = await conn.fetchval(
+            """SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'memories' AND column_name = 'embedding_status'
+            )"""
+        )
+        if not col_exists:
+            await conn.execute(
+                "ALTER TABLE memories ADD COLUMN IF NOT EXISTS "
+                "embedding_status TEXT NOT NULL DEFAULT 'complete'"
+            )
+            logger.info("Migration: added embedding_status column to memories")
 
     async def close(self):
         """Close connection pool."""
@@ -197,6 +213,62 @@ class Database:
             return True
         except Exception:
             return False
+
+    async def count_failed_embeddings(self) -> int:
+        """Count memories with failed or missing embeddings."""
+        try:
+            async with self.acquire() as conn:
+                # Check for embedding_status column existence first
+                col_exists = await conn.fetchval(
+                    """SELECT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'memories'
+                        AND column_name = 'embedding_status'
+                    )"""
+                )
+                if col_exists:
+                    return await conn.fetchval(
+                        "SELECT COUNT(*) FROM memories "
+                        "WHERE embedding IS NULL OR embedding_status = 'failed'"
+                    )
+                else:
+                    return await conn.fetchval(
+                        "SELECT COUNT(*) FROM memories WHERE embedding IS NULL"
+                    )
+        except Exception:
+            return 0
+
+    async def get_failed_embedding_memories(self, bank_id: str = None,
+                                            limit: int = 100) -> list[dict]:
+        """Get memories with failed or missing embeddings for repair."""
+        async with self.acquire() as conn:
+            if bank_id:
+                rows = await conn.fetch(
+                    "SELECT id, content, bank_id FROM memories "
+                    "WHERE (embedding IS NULL OR embedding_status = 'failed') "
+                    "AND bank_id = $1 AND status = 'active' LIMIT $2",
+                    bank_id, limit,
+                )
+            else:
+                rows = await conn.fetch(
+                    "SELECT id, content, bank_id FROM memories "
+                    "WHERE (embedding IS NULL OR embedding_status = 'failed') "
+                    "AND status = 'active' LIMIT $1",
+                    limit,
+                )
+            return [dict(r) for r in rows]
+
+    async def update_memory_embedding(self, memory_id: str, embedding: list[float],
+                                      status: str = "complete") -> None:
+        """Update a memory's embedding vector and status."""
+        import numpy as np
+        vec = np.array(embedding, dtype=np.float32)
+        async with self.acquire() as conn:
+            await conn.execute(
+                "UPDATE memories SET embedding = $1, embedding_status = $2 "
+                "WHERE id = $3::uuid",
+                vec, status, memory_id,
+            )
 
     # ── Bank Operations ──
 
@@ -272,30 +344,33 @@ class Database:
     # ── Memory Operations ──
 
     async def insert_memory(self, bank_id: str, content: str, content_type: str,
-                            source: str, embedding: list[float],
+                            source: str, embedding: list[float] | None,
                             reasoning: Optional[str], authority: str,
                             weight: float, confidence: float,
                             decay_condition: Optional[str],
                             supersedes: list[str], depends_on: list[str],
                             tags: list[str],
-                            extracted_facts: list[dict]) -> dict:
+                            extracted_facts: list[dict],
+                            embedding_status: str = "complete") -> dict:
         import numpy as np
-        vec = np.array(embedding, dtype=np.float32)
+        vec = np.array(embedding, dtype=np.float32) if embedding is not None else None
 
         async with self.transaction() as conn:
             row = await conn.fetchrow(
                 """INSERT INTO memories
                    (bank_id, content, content_type, source, embedding,
                     reasoning, authority, weight, confidence, decay_condition,
-                    supersedes, depends_on, tags, extracted_facts)
+                    supersedes, depends_on, tags, extracted_facts,
+                    embedding_status)
                    VALUES ($1::uuid, $2, $3, $4, $5,
                            $6, $7, $8, $9, $10,
-                           $11::uuid[], $12::uuid[], $13::text[], $14::jsonb)
+                           $11::uuid[], $12::uuid[], $13::text[], $14::jsonb,
+                           $15)
                    RETURNING *""",
                 bank_id, content, content_type, source, vec,
                 reasoning, authority, weight, confidence, decay_condition,
                 supersedes or [], depends_on or [], tags or [],
-                _to_json(extracted_facts),
+                _to_json(extracted_facts), embedding_status,
             )
 
             # Mark superseded memories

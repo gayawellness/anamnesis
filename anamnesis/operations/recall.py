@@ -116,25 +116,42 @@ async def recall(
 
     total_candidates = len(all_memories)
 
-    # Assign RRF scores per dimension
-    _assign_rrf_scores(semantic_results, dimension_ranks, "semantic",
-                       weight_factors.get("semantic", 0.3))
-    _assign_rrf_scores(fulltext_results, dimension_ranks, "semantic",
-                       weight_factors.get("semantic", 0.3) * 0.5)  # FT supplements semantic
-    _assign_rrf_scores(temporal_results, dimension_ranks, "temporal",
-                       weight_factors.get("temporal", 0.2))
-    _assign_rrf_scores(relational_results, dimension_ranks, "relational",
-                       weight_factors.get("relational", 0.2))
+    # Assign raw RRF scores per dimension (unweighted — weight=1.0)
+    _assign_rrf_scores(semantic_results, dimension_ranks, "semantic", 1.0)
+    _assign_rrf_scores(fulltext_results, dimension_ranks, "semantic", 0.5)  # FT supplements semantic
+    _assign_rrf_scores(temporal_results, dimension_ranks, "temporal", 1.0)
+    _assign_rrf_scores(relational_results, dimension_ranks, "relational", 1.0)
 
-    # 4. Strategic weight boost (Dimension 4)
-    strategic_weight_factor = weight_factors.get("strategic", 0.3)
+    # 4. Normalize each dimension to [0, 1] then apply weight factors.
+    # Without normalization, RRF scores max at ~0.016 while strategic
+    # scores reach 0.30, making semantic recall effectively useless.
+    sem_wf = weight_factors.get("semantic", 0.3)
+    temp_wf = weight_factors.get("temporal", 0.2)
+    rel_wf = weight_factors.get("relational", 0.2)
+    strat_wf = weight_factors.get("strategic", 0.3)
+
+    max_sem = max((d.semantic for d in dimension_ranks.values()), default=0) or 1e-9
+    max_temp = max((d.temporal for d in dimension_ranks.values()), default=0) or 1e-9
+    max_rel = max((d.relational for d in dimension_ranks.values()), default=0) or 1e-9
+
     fused_scores: dict[str, float] = {}
     for mid, dim_scores in dimension_ranks.items():
-        rrf_sum = dim_scores.semantic + dim_scores.temporal + dim_scores.relational
+        # Normalize RRF scores to [0, 1] then scale by weight factor
+        norm_sem = (dim_scores.semantic / max_sem) * sem_wf
+        norm_temp = (dim_scores.temporal / max_temp) * temp_wf
+        norm_rel = (dim_scores.relational / max_rel) * rel_wf
+
+        # Strategic: already [0, 1] via weight/10, then scale by weight factor
         memory_weight = all_memories[mid].get("weight", 1.0)
-        strategic_score = (memory_weight / 10.0) * strategic_weight_factor
-        dim_scores.strategic = round(strategic_score, 4)
-        fused_scores[mid] = rrf_sum + strategic_score
+        norm_strat = (memory_weight / 10.0) * strat_wf
+
+        # Update dimension scores for reporting
+        dim_scores.semantic = round(norm_sem, 6)
+        dim_scores.temporal = round(norm_temp, 6)
+        dim_scores.relational = round(norm_rel, 6)
+        dim_scores.strategic = round(norm_strat, 4)
+
+        fused_scores[mid] = norm_sem + norm_temp + norm_rel + norm_strat
 
     # 5. Sort by fused score, take top N
     sorted_ids = sorted(fused_scores, key=lambda x: fused_scores[x], reverse=True)

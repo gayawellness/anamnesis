@@ -108,6 +108,8 @@ class RetainResponse(BaseModel):
     entities_linked: list[str]
     weight: float
     weight_note: str = ""
+    warning: Optional[str] = None
+    embedding_status: Optional[str] = None  # "complete", "fallback", or "failed"
 
 
 # ── Recall ──
@@ -312,9 +314,14 @@ class BootResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str = "ok"
-    version: str = "0.1.0"
-    db_connected: bool = False
-    embedding_configured: bool = False
+    version: str = "0.2.1"
+    database: str = "disconnected"
+    embedding_provider: str = "unknown"
+    embedding_status: str = "unknown"
+    scoring_normalization: str = "enabled"
     llm_configured: bool = False
-    memory_count: int = 0
-    bank_count: int = 0
+    banks: int = 0
+    total_memories: int = 0
+    memories_missing_embeddings: int = 0
+    uptime_seconds: float = 0.0
+    warning: Optional[str] = None

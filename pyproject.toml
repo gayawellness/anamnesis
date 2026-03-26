@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "anamnesis"
-version = "0.1.0"
+version = "0.2.1"
 description = "4D Strategic Memory Engine for Autonomous AI Agents"
 readme = "README.md"
 license = {text = "MIT"}
@@ -47,6 +47,11 @@ all = [
     "mcp>=1.0",
 ]
 
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
 [project.urls]
 Homepage = "https://github.com/gayawellness/anamnesis"
 Repository = "https://github.com/gayawellness/anamnesis"
@@ -54,3 +59,6 @@ Issues = "https://github.com/gayawellness/anamnesis/issues"
 
 [tool.setuptools.packages.find]
 include = ["anamnesis*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

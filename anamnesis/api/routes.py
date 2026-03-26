@@ -117,16 +117,59 @@ def _get_llm(request: Request):
 
 @router.get("/health", response_model=HealthResponse)
 async def health(request: Request):
+    import time as _time
+
     db = _get_db(request)
     config = request.app.state.config
+    embedder = _get_embedder(request)
+    startup_time = getattr(request.app.state, "startup_time", _time.monotonic())
+
     db_ok = await db.is_healthy()
+
+    # Check embedding provider health (cached for 60 seconds)
+    embedding_status = "unknown"
+    emb_cache = getattr(request.app.state, "_embedding_health_cache", None)
+    cache_age = (_time.monotonic() - emb_cache[1]) if emb_cache else 999
+    if emb_cache and cache_age < 60:
+        embedding_status = emb_cache[0]
+    else:
+        try:
+            await embedder.embed("health check")
+            embedding_status = "healthy"
+        except Exception as e:
+            embedding_status = f"failing — {e}"
+        request.app.state._embedding_health_cache = (embedding_status, _time.monotonic())
+
+    missing_embeddings = await db.count_failed_embeddings() if db_ok else 0
+
+    # Determine overall status
+    warnings = []
+    status = "healthy"
+    if not db_ok:
+        status = "degraded"
+        warnings.append("Database unreachable")
+    if "failing" in embedding_status:
+        status = "degraded"
+        warnings.append(f"Embedding provider: {embedding_status}")
+    if missing_embeddings > 0:
+        status = "degraded"
+        warnings.append(
+            f"{missing_embeddings} memories need embedding repair. "
+            "Run: python3 -m anamnesis.cli repair-embeddings --bank <name>"
+        )
+
     return HealthResponse(
-        status="ok" if db_ok else "degraded",
-        db_connected=db_ok,
-        embedding_configured=config.embedding.is_configured,
+        status=status,
+        database="connected" if db_ok else "disconnected",
+        embedding_provider=config.embedding.provider,
+        embedding_status=embedding_status,
+        scoring_normalization="enabled",
         llm_configured=config.llm.is_configured,
-        memory_count=await db.total_memory_count() if db_ok else 0,
-        bank_count=await db.total_bank_count() if db_ok else 0,
+        banks=await db.total_bank_count() if db_ok else 0,
+        total_memories=await db.total_memory_count() if db_ok else 0,
+        memories_missing_embeddings=missing_embeddings,
+        uptime_seconds=round(_time.monotonic() - startup_time, 1),
+        warning="; ".join(warnings) if warnings else None,
     )
 
 

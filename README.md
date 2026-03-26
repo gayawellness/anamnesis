@@ -211,6 +211,12 @@ python3 -m anamnesis.cli import --file backup.json
 
 # Import with merge (don't overwrite)
 python3 -m anamnesis.cli import --file backup.json --merge
+
+# Diagnose scoring quality for a query
+python3 -m anamnesis.cli diagnose-scoring --bank <name> --query "test query"
+
+# Repair memories with missing or failed embeddings
+python3 -m anamnesis.cli repair-embeddings --bank <name>
 ```
 
 ## API Endpoints
@@ -227,3 +233,47 @@ python3 -m anamnesis.cli import --file backup.json --merge
 | POST | /api/v1/reweight | Recalculate weights |
 | GET | /api/v1/export/{bank_name} | Export bank to JSON |
 | POST | /api/v1/import | Import from JSON |
+
+## Troubleshooting
+
+### Understanding Recall Scores
+
+Every recalled memory includes a `dimension_scores` breakdown showing how much each retrieval dimension contributed to the final ranking:
+
+| Dimension | Range | What it measures |
+|-----------|-------|-----------------|
+| `semantic` | 0.0–1.0 | How conceptually similar the memory content is to your query, based on embedding vector similarity. Higher = closer semantic match. |
+| `temporal` | 0.0–1.0 | Recency and time-relevance. More recently created or accessed memories score higher. |
+| `relational` | 0.0–1.0 | Entity graph connections. Memories sharing entities (people, concepts, systems) with the query score higher. |
+| `strategic` | 0.0–1.0 | The memory's strategic weight, normalized from its weight envelope (weight / 10 * weight_factor). Higher-weight memories score higher here. |
+
+The final score is the sum of all four dimension scores, each scaled by the bank's configured `weight_factors` (default: semantic 30%, temporal 20%, relational 20%, strategic 30%).
+
+### Red Flag Patterns
+
+**All semantic scores nearly identical (e.g., all 0.003–0.004):** Score normalization is likely broken. In a healthy system, the top semantic match should score near 0.30 (the semantic weight factor) while poor matches score near 0. Run `diagnose-scoring` to verify:
+
+```bash
+python3 -m anamnesis.cli diagnose-scoring --bank my_bank --query "a known topic"
+```
+
+**Semantic scores are always zero:** Embeddings are not being generated. Check:
+1. Your embedding provider is configured (`ANAMNESIS_EMBEDDING_PROVIDER` in `.env`)
+2. If using Voyage, your `VOYAGE_API_KEY` is valid
+3. Run `repair-embeddings` to fix any memories with missing vectors
+
+**Strategic dimension dominates (>50% of total score for every result):** Check that your bank's `weight_factors` sum to approximately 1.0 and that no single factor exceeds 0.5.
+
+### Embedding Repair
+
+If memories were stored while the embedding provider was down, they won't appear in semantic search. Repair them:
+
+```bash
+# Repair embeddings for a specific bank
+python3 -m anamnesis.cli repair-embeddings --bank my_bank
+
+# Repair all banks
+python3 -m anamnesis.cli repair-embeddings
+```
+
+The health endpoint (`GET /api/v1/health`) reports `memories_missing_embeddings` count so you can monitor this.

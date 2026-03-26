@@ -60,8 +60,10 @@ async def retain(
     # 1b. Enforce write_agents access control
     _enforce_write_access(bank, request.source)
 
-    # 2. Generate embedding
-    embedding = await embedder.embed(request.content)
+    # 2. Generate embedding (with retry and fallback)
+    embedding, embedding_status, embedding_warning = await _generate_embedding_safe(
+        embedder, request.content
+    )
 
     # 3. Extract facts (if LLM available)
     extracted_facts: list[ExtractedFact] = []
@@ -84,7 +86,7 @@ async def retain(
 
     # 6. Insert memory
     facts_dicts = [f.model_dump() for f in extracted_facts]
-    row = await db.insert_memory(
+    insert_kwargs = dict(
         bank_id=bank_id,
         content=request.content,
         content_type=request.content_type.value,
@@ -100,6 +102,9 @@ async def retain(
         tags=request.tags,
         extracted_facts=facts_dicts,
     )
+    if embedding_status != "complete":
+        insert_kwargs["embedding_status"] = embedding_status
+    row = await db.insert_memory(**insert_kwargs)
 
     memory_id = str(row["id"])
 
@@ -116,12 +121,68 @@ async def retain(
         len(extracted_facts), len(entities_linked),
     )
 
-    return RetainResponse(
+    response = RetainResponse(
         memory_id=memory_id,
         extracted_facts=extracted_facts,
         entities_linked=entities_linked,
         weight=weight,
         weight_note=weight_note,
+    )
+    if embedding_warning:
+        response.warning = embedding_warning
+        response.embedding_status = embedding_status
+    return response
+
+
+async def _generate_embedding_safe(
+    embedder: BaseEmbedder, content: str
+) -> tuple[list[float] | None, str, str | None]:
+    """Generate embedding with retry and local fallback.
+
+    Returns:
+        (embedding, status, warning) tuple.
+        status is "complete", "fallback", or "failed".
+        warning is None on success, a message on degraded/failed.
+    """
+    import asyncio
+
+    # Attempt 1: primary provider
+    try:
+        embedding = await embedder.embed(content)
+        return embedding, "complete", None
+    except Exception as e:
+        logger.warning("Embedding attempt 1 failed: %s", e)
+
+    # Attempt 2: retry after 2 seconds
+    await asyncio.sleep(2)
+    try:
+        embedding = await embedder.embed(content)
+        return embedding, "complete", None
+    except Exception as e:
+        logger.warning("Embedding attempt 2 failed: %s", e)
+
+    # Attempt 3: local fallback (if primary is not already local)
+    try:
+        from anamnesis.config import EmbeddingConfig
+        from anamnesis.embedder import LocalEmbedder
+        fallback_config = EmbeddingConfig(
+            provider="local", model="all-MiniLM-L6-v2",
+        )
+        fallback = LocalEmbedder(fallback_config)
+        embedding = await fallback.embed(content)
+        return embedding, "fallback", (
+            "Primary embedding provider failed. Used local fallback. "
+            "Memory is searchable but may have reduced semantic quality."
+        )
+    except Exception as e:
+        logger.error("Local embedding fallback also failed: %s", e)
+
+    # All attempts failed — store without embedding
+    logger.error("All embedding attempts failed for content: %.60s...", content)
+    return None, "failed", (
+        "Embedding generation failed. Memory stored but will not appear "
+        "in semantic search until repaired. "
+        "Run: python3 -m anamnesis.cli repair-embeddings --bank <name>"
     )
 
 

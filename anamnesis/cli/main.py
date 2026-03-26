@@ -11,6 +11,8 @@ Usage:
     python3 -m anamnesis.cli prune --bank <name> --dry-run
     python3 -m anamnesis.cli prune --bank <name>
     python3 -m anamnesis.cli restore --memory-id <uuid>
+    python3 -m anamnesis.cli diagnose-scoring --bank <name> --query "test query"
+    python3 -m anamnesis.cli repair-embeddings --bank <name>
 """
 
 from __future__ import annotations
@@ -238,6 +240,146 @@ def cmd_prune(args: argparse.Namespace) -> None:
         client.close()
 
 
+def cmd_diagnose_scoring(args: argparse.Namespace) -> None:
+    """Run a scoring diagnostic showing raw vs normalized dimension scores."""
+    from anamnesis.sdk.client import AnamnesisClient, AnamnesisError
+
+    client = AnamnesisClient.from_env()
+    try:
+        result = client.recall(
+            bank=args.bank,
+            query=args.query,
+            limit=args.limit,
+        )
+
+        memories = result.get("memories", [])
+        if not memories:
+            print("No memories found for this query.")
+            return
+
+        print(f"=== Scoring Diagnostic: {args.bank} ===")
+        print(f"Query: {args.query}")
+        print(f"Results: {len(memories)} of {result.get('total_candidates', 0)} candidates")
+        print(f"Retrieval time: {result.get('retrieval_time_ms', 0):.0f}ms\n")
+
+        # Check for pathological patterns
+        sem_scores = [m["dimension_scores"]["semantic"] for m in memories]
+        sem_range = max(sem_scores) - min(sem_scores) if len(sem_scores) > 1 else 0
+
+        if sem_range < 0.01 and len(memories) > 1:
+            print("!! RED FLAG: All semantic scores are nearly identical "
+                  f"(range: {sem_range:.6f}).")
+            print("   This suggests score normalization is broken or "
+                  "embeddings are not differentiating.\n")
+        else:
+            print(f"Semantic score range: {min(sem_scores):.4f} - {max(sem_scores):.4f} "
+                  f"(spread: {sem_range:.4f}) -- OK\n")
+
+        # Show dimension contribution percentages
+        print(f"{'#':>2}  {'Score':>7}  {'Sem%':>5}  {'Tmp%':>5}  "
+              f"{'Rel%':>5}  {'Str%':>5}  {'Wt':>4}  Content")
+        print("-" * 90)
+
+        for i, m in enumerate(memories):
+            ds = m["dimension_scores"]
+            total = m["score"] or 1e-9
+            sem_pct = ds["semantic"] / total * 100
+            tmp_pct = ds["temporal"] / total * 100
+            rel_pct = ds["relational"] / total * 100
+            str_pct = ds["strategic"] / total * 100
+            content = m["content"][:40].replace("\n", " ")
+            print(
+                f"{i+1:>2}  {m['score']:>7.4f}  {sem_pct:>4.0f}%  {tmp_pct:>4.0f}%  "
+                f"{rel_pct:>4.0f}%  {str_pct:>4.0f}%  {m['weight']:>4.1f}  {content}"
+            )
+
+        # Summary health check
+        print()
+        max_contribution = 0
+        max_dim = ""
+        for dim in ["semantic", "temporal", "relational", "strategic"]:
+            contributions = []
+            for m in memories:
+                total = m["score"] or 1e-9
+                contributions.append(m["dimension_scores"][dim] / total)
+            avg = sum(contributions) / len(contributions) if contributions else 0
+            if avg > max_contribution:
+                max_contribution = avg
+                max_dim = dim
+
+        if max_contribution > 0.50:
+            print(f"!! WARNING: '{max_dim}' dimension averages {max_contribution:.0%} "
+                  "contribution — may be dominating other dimensions.")
+        else:
+            print(f"Dimension balance: OK (highest avg contribution: "
+                  f"{max_dim} at {max_contribution:.0%})")
+
+    except AnamnesisError as e:
+        print(f"Diagnostic failed: {e}", file=sys.stderr)
+        sys.exit(1)
+    finally:
+        client.close()
+
+
+def cmd_repair_embeddings(args: argparse.Namespace) -> None:
+    """Find and repair memories with missing or failed embeddings."""
+    import asyncio
+
+    async def _repair():
+        from anamnesis.config import AnamnesisConfig
+        from anamnesis.db import Database
+        from anamnesis.embedder import create_embedder
+
+        config = AnamnesisConfig()
+        embedder = create_embedder(config.embedding)
+        db = Database(config.db, embedding_dims=embedder.dimensions)
+        await db.connect()
+
+        try:
+            # Resolve bank if specified
+            bank_id = None
+            if args.bank:
+                bank = await db.get_bank_by_name(args.bank)
+                if not bank:
+                    print(f"Bank not found: {args.bank}", file=sys.stderr)
+                    return
+                bank_id = str(bank["id"])
+
+            # Find memories needing repair
+            memories = await db.get_failed_embedding_memories(
+                bank_id=bank_id, limit=500,
+            )
+
+            if not memories:
+                print("No memories with missing or failed embeddings found.")
+                return
+
+            print(f"Found {len(memories)} memories needing embedding repair.\n")
+
+            repaired = 0
+            failed = 0
+            for mem in memories:
+                content = mem["content"]
+                mid = str(mem["id"])
+                try:
+                    embedding = await embedder.embed(content)
+                    await db.update_memory_embedding(mid, embedding, "complete")
+                    repaired += 1
+                    preview = content[:50].replace("\n", " ")
+                    print(f"  Repaired: {mid[:8]}... {preview}")
+                except Exception as e:
+                    failed += 1
+                    print(f"  FAILED:   {mid[:8]}... {e}")
+
+            print(f"\nResults: {repaired} repaired, {failed} failed")
+            if failed > 0:
+                print("Re-run after fixing your embedding provider configuration.")
+        finally:
+            await db.close()
+
+    asyncio.run(_repair())
+
+
 def cmd_restore(args: argparse.Namespace) -> None:
     """Restore an archived memory back to active status."""
     from anamnesis.sdk.client import AnamnesisClient, AnamnesisError
@@ -355,6 +497,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="UUID of the archived memory to restore",
     )
 
+    # diagnose-scoring
+    diag_cmd = sub.add_parser(
+        "diagnose-scoring",
+        help="Run a scoring diagnostic showing dimension balance for a query",
+    )
+    diag_cmd.add_argument(
+        "--bank", required=True, help="Memory bank name",
+    )
+    diag_cmd.add_argument(
+        "--query", required=True, help="Test query to diagnose scoring for",
+    )
+    diag_cmd.add_argument(
+        "--limit", type=int, default=10,
+        help="Number of results to analyze (default: 10)",
+    )
+
+    # repair-embeddings
+    repair_cmd = sub.add_parser(
+        "repair-embeddings",
+        help="Find and repair memories with missing or failed embeddings",
+    )
+    repair_cmd.add_argument(
+        "--bank", default=None,
+        help="Memory bank name (optional, repairs all banks if omitted)",
+    )
+
     return parser
 
 
@@ -373,6 +541,8 @@ def main() -> None:
         "import": cmd_import,
         "prune": cmd_prune,
         "restore": cmd_restore,
+        "diagnose-scoring": cmd_diagnose_scoring,
+        "repair-embeddings": cmd_repair_embeddings,
     }
 
     handler = commands.get(args.command)
