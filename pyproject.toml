@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "anamnesis"
-version = "0.2.1"
+version = "0.2.0"
 description = "4D Strategic Memory Engine for Autonomous AI Agents"
 readme = "README.md"
 license = {text = "MIT"}

@@ -127,7 +127,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="Anamnesis",
         description="4D Strategic Memory Engine for Autonomous AI Agents",
-        version="0.2.1",
+        version="0.2.0",
         lifespan=lifespan,
     )
 

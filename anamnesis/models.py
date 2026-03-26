@@ -314,7 +314,7 @@ class BootResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str = "ok"
-    version: str = "0.2.1"
+    version: str = "0.2.0"
     database: str = "disconnected"
     embedding_provider: str = "unknown"
     embedding_status: str = "unknown"
